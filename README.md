@@ -1,185 +1,127 @@
-# Sistema Distribuído de Classificação Inteligente de Mensagens com RabbitMQ
+# Sistema Distribuído de Classificação de Mensagens com RabbitMQ
 
-Este repositório contém a implementação de um sistema distribuído para geração, distribuição e classificação inteligente de mensagens utilizando **Java 21**, **Docker**, **RabbitMQ** e **Inteligência Artificial (Smile ML)**.
-
-O sistema é composto por 4 containers interdependentes operando em uma rede customizada Docker do tipo *bridge*.
+Trabalho prático da disciplina de Sistemas Distribuídos: desenvolvimento de um sistema distribuído para geração contínua, distribuição por tópicos e classificação de mensagens utilizando **Java 21**, **Docker Compose**, **RabbitMQ** e a biblioteca de inteligência artificial **Smile**.
 
 ---
 
-## 🏗️ 1. Arquitetura do Sistema
+## 1. Arquitetura do Sistema
 
-A arquitetura adota o padrão orientado a eventos (*Event-Driven Architecture*) com broker de mensageria **RabbitMQ** e processamento assíncrono.
+O sistema é composto por 4 containers conectados em uma mesma rede Docker bridge (`rabbitmq-network`):
 
-```mermaid
-flowchart TD
-    subgraph Producer ["1. Gerador (Produtor)"]
-        G["gerador (Java 21)<br/>Taxa: ~5.5 msg/s"]
-    end
-
-    subgraph Broker ["2. Broker RabbitMQ"]
-        TE["Topic Exchange<br/><b>app.topic</b>"]
-        QR["Fila: <b>queue.review</b><br/>(com x-dead-letter)"]
-        QS["Fila: <b>queue.support</b><br/>(com x-dead-letter)"]
-        DLX["Dead Letter Exchange (Direct)<br/><b>app.dlx</b>"]
-        DLR["DLQ: <b>queue.review.dlq</b>"]
-        DLS["DLQ: <b>queue.support.dlq</b>"]
-    end
-
-    subgraph Consumers ["3 & 4. Consumidores Inteligentes"]
-        C1["Consumidor 1: Sentimento<br/><b>Smile Naive Bayes</b><br/>(1 msg/s)"]
-        C2["Consumidor 2: Suporte<br/><b>Smile Naive Bayes</b><br/>(1 msg/s)"]
-    end
-
-    G -->|"review.product"| TE
-    G -->|"support.request"| TE
-
-    TE -->|"review.product"| QR
-    TE -->|"support.request"| QS
-
-    QR -->|"Consumo lento (ACK manual)"| C1
-    QS -->|"Consumo lento (ACK manual)"| C2
-
-    QR -.->|"NACK (requeue=false)"| DLX
-    QS -.->|"NACK (requeue=false)"| DLX
-
-    DLX -->|"review.dlq"| DLR
-    DLX -->|"support.dlq"| DLS
-```
-
-### Componentes:
-1. **`rabbitmq`**: Broker RabbitMQ 3 com interface de gerenciamento (`15672`) e porta AMQP (`5672`).
-2. **`gerador`**: Produz continuamente ~5,55 mensagens por segundo (intervalo de 180ms), alternando aleatoriamente entre avaliações de produtos e chamados de suporte.
-3. **`consumidor-sentimento`**: Fila vinculada à routing key `review.product`. Classifica o sentimento em tempo real via IA embarcada.
-4. **`consumidor-suporte`**: Fila vinculada à routing key `support.request`. Classifica a categoria técnica em tempo real via IA embarcada.
+- **rabbitmq:** Broker RabbitMQ com a interface web de administração exposta na porta `15672` e porta AMQP `5672`.
+- **gerador:** Serviço produtor em Java que gera continuamente pelo menos 5 mensagens por segundo (~5,5 msg/s). Publica em um Topic Exchange (`app.topic`) alternando entre avaliações de produtos (`review.product`) e chamados de suporte (`support.request`).
+- **consumidor-sentimento:** Consome mensagens da fila `queue.review` e classifica o sentimento do texto em Positivo, Negativo ou Neutro.
+- **consumidor-suporte:** Consome mensagens da fila `queue.support` e classifica o chamado técnico em Problema de acesso, Problema de desempenho ou Problema de conexão.
+- **Dead Letter Queue (DLQ):** As filas possuem configuração de DLQ através do Dead Letter Exchange `app.dlx`. Mensagens com falha de processamento sofrem `basicNack` com `requeue=false` e são redirecionadas para `queue.review.dlq` e `queue.support.dlq`.
 
 ---
 
-## 🧠 2. Mecanismo das IAs (Smile Machine Learning)
+## 2. Inteligência Artificial com Smile
 
-Ambos os consumidores utilizam a biblioteca [Smile Core](https://github.com/haifengl/smile) (`com.github.haifengl:smile-core`) para aprendizado de máquina supervisionado embarcado.
+Os dois consumidores utilizam a biblioteca **Smile** (`com.github.haifengl:smile-core`) para aprendizado de máquina supervisionado embarcado.
 
-- **Algoritmo:** **Multinomial Discrete Naive Bayes** (`smile.classification.DiscreteNaiveBayes`).
-- **Técnica de NLP:** Vetorização *Bag-of-Words* com tokenização e normalização textual (remoção de caracteres especiais e *lowercasing*).
-- **Treinamento:** Executado dinamicamente em memória durante a inicialização do container.
+- **Modelo:** `DiscreteNaiveBayes` (Multinomial).
+- **Processamento de Texto:** Vetorização bag-of-words sobre o vocabulário das mensagens.
+- **Treinamento:** Executado em memória na inicialização de cada consumidor com dados representativos.
 
-### Categorias de Classificação:
-| Serviço | Algoritmo | Classes de Saída |
+| Serviço | Modelo | Classes |
 | :--- | :--- | :--- |
 | **Consumidor 1** | Naive Bayes Multinomial | `Positivo`, `Negativo`, `Neutro` |
 | **Consumidor 2** | Naive Bayes Multinomial | `Problema de acesso`, `Problema de desempenho`, `Problema de conexão` |
 
 ---
 
-## 🛡️ 3. Resiliência, Concorrência e DLQ (Dead Letter Queue)
+## 3. Mensageria, Concorrência e DLQ
 
-- **Manual ACK (`autoAck = false`):** Cada mensagem só é confirmada no broker após o processamento bem-sucedido (`channel.basicAck`).
-- **QoS Prefetch (`basicQos(1)`):** Cada consumidor processa estritamente 1 mensagem por vez.
-- **Visualização do Crescimento de Fila:** O gerador envia ~5,5 msg/s enquanto os consumidores processam com `Thread.sleep(1000)` (~1 msg/s), permitindo observar o acúmulo das filas no painel do RabbitMQ.
-- **Tratamento de Erro e DLQ:** Quando uma mensagem contém a palavra-chave `'ERRO_TESTE'` (ou causa falha), o consumidor aciona uma exceção e executa:
+- **Confirmação Manual (Manual ACK):** O consumo não utiliza auto-ack (`autoAck = false`). A mensagem só é confirmada após o término do processamento (`basicAck`).
+- **Controle de Concorrência (QoS):** Configurado `basicQos(1)` em ambos os consumidores.
+- **Crescimento das Filas:** O gerador envia ~5,5 msg/s (intervalo de 180ms), enquanto os consumidores processam a ~1 msg/s (`Thread.sleep(1000)`), permitindo visualizar o acúmulo das mensagens no painel do RabbitMQ.
+- **Tratamento de Erros:** Quando o texto da mensagem contém a palavra-chave `'ERRO_TESTE'`, o consumidor lança uma exceção e executa:
   ```java
-  channel.basicNack(deliveryTag, false, false); // requeue = false
+  channel.basicNack(deliveryTag, false, false);
   ```
-  O RabbitMQ rejeita a mensagem e a transfere automaticamente para o Dead Letter Exchange (`app.dlx`) e para a respectiva DLQ (`queue.review.dlq` ou `queue.support.dlq`).
+  O broker descarta a mensagem da fila principal e a envia diretamente para a Dead Letter Queue correspondente.
 
 ---
 
-## 🚀 4. Como Executar o Sistema
+## 4. Instruções de Execução
 
 ### Pré-requisitos
-- [Docker Engine](https://docs.docker.com/engine/install/) e [Docker Compose](https://docs.docker.com/compose/) instalados.
+- Docker e Docker Compose instalados.
 
-### Inicialização
-Para construir as imagens e subir os 4 containers:
+### Subir os containers
 ```bash
 docker compose up -d --build
 ```
 
-Para verificar o status dos containers:
+### Verificar status
 ```bash
 docker compose ps
 ```
 
-### Acompanhamento dos Logs
-- **Log do Gerador:**
+### Visualizar logs
+- **Gerador:**
   ```bash
   docker logs -f gerador
   ```
-- **Log do Consumidor 1 (Análise de Sentimento):**
+- **Consumidor 1 (Sentimento):**
   ```bash
   docker logs -f consumidor-sentimento
   ```
-- **Log do Consumidor 2 (Classificação de Suporte):**
+- **Consumidor 2 (Suporte):**
   ```bash
   docker logs -f consumidor-suporte
   ```
 
-### Interface Administrativa do RabbitMQ
-- Acesse no navegador: [http://localhost:15672](http://localhost:15672)
-- **Usuário:** `guest`
-- **Senha:** `guest`
+### Painel do RabbitMQ
+- Acesse: [http://localhost:15672](http://localhost:15672)
+- Usuário: `guest` | Senha: `guest`
 
 ---
 
-## 🧪 5. Roteiro para a Demonstração em Vídeo (+- 5 minutos)
+## 5. Roteiro para o Vídeo de Demonstração (+- 5 minutos)
 
-Durante a gravação da apresentação, demonstre os 5 pontos exigidos pelo trabalho:
-
-1. **Geração Contínua de Mensagens:**
-   - Mostre o terminal executando `docker logs -f gerador`.
-   - Destaque o envio com mais de 5 mensagens por segundo e as estatísticas periódicas.
-2. **Encaminhamento pelo Topic Exchange:**
-   - No painel Web do RabbitMQ (`Exchanges > app.topic`), mostre os bindings para as routing keys `review.product` e `support.request`.
-3. **Classificação em Tempo Real pelas duas IAs:**
-   - Divida a tela e exiba os logs dos dois consumidores:
-     - `docker logs -f consumidor-sentimento` exibindo: `Mensagem: [...] - Classificação: [Positivo/Negativo/Neutro]`.
-     - `docker logs -f consumidor-suporte` exibindo: `Mensagem: [...] - Classificação: [Problema de acesso/desempenho/conexão]`.
-4. **Crescimento das Filas:**
-   - No painel Web do RabbitMQ (`Queues`), mostre a coluna *Total* crescendo continuamente nas filas `queue.review` e `queue.support` devido ao consumo mais lento (1000ms vs 180ms).
-5. **Tratamento de Mensagem com Erro via DLQ:**
-   - Execute o script facilitador de teste:
-     ```bash
-     ./test-dlq.sh
-     ```
-   - Nos logs do consumidor, mostre a captura da exceção `'ERRO_TESTE'` e a emissão do `NACK`.
-   - Na interface do RabbitMQ, mostre as mensagens chegando com sucesso nas filas `queue.review.dlq` e `queue.support.dlq`.
+1. **Geração contínua:** Mostrar o terminal com `docker logs -f gerador` produzindo mensagens a > 5 msg/s.
+2. **Topic Exchange:** Abrir o painel web em *Exchanges > app.topic* e mostrar os bindings para `review.product` e `support.request`.
+3. **Classificação pelas IAs:** Exibir os logs dos dois consumidores classificando em tempo real.
+4. **Crescimento das filas:** No painel web (*Queues*), mostrar o total de mensagens crescendo nas filas `queue.review` e `queue.support`.
+5. **Tratamento de erro via DLQ:** Executar `./test-dlq.sh`, mostrar o `NACK` no log do consumidor e a mensagem chegando na fila DLQ (`queue.review.dlq`).
 
 ---
 
-## 📸 6. Evidências de Execução
-
-Abaixo estão registradas as evidências de execução do sistema cobrindo todos os requisitos avaliativos da atividade:
+## 6. Evidências de Execução
 
 ### 6.1 Geração Contínua de Mensagens (> 5 msg/s)
-O serviço **Gerador** publica continuamente mensagens alternadas nos tipos `AVALIACAO` e `SUPORTE`, com taxa superior a 5 mensagens por segundo:
+O serviço **Gerador** publica continuamente mensagens alternadas nos tipos `AVALIACAO` e `SUPORTE`:
 ![Logs do Gerador](docs/screenshots/07-gerador-logs.png)
 
-### 6.2 Topic Exchange e Roteamento (`review.product` e `support.request`)
-Visão geral dos exchanges no RabbitMQ e o mapeamento do Topic Exchange `app.topic` roteando mensagens com taxa de entrada/saída de **~5,4 msg/s**:
+### 6.2 Topic Exchange e Roteamento
+Visão geral dos exchanges e detalhe dos bindings do `app.topic` para as routing keys `review.product` e `support.request`:
 ![Exchanges RabbitMQ](docs/screenshots/01-exchanges-overview.png)
 ![Bindings do Topic Exchange](docs/screenshots/02-topic-exchange-bindings.png)
 
-### 6.3 Crescimento das Filas e Consumo Lento (Manual ACK)
-As filas `queue.review` e `queue.support` acumulando mensagens (mais de 9.300 mensagens enfileiradas), evidenciando o consumo lento de ~1 msg/s com confirmação manual (`basicAck`) e QoS prefetch = 1:
+### 6.3 Crescimento das Filas e Consumo Lento
+Acúmulo de mensagens nas filas `queue.review` e `queue.support` com consumo lento e confirmação manual:
 ![Crescimento da Fila de Avaliações](docs/screenshots/03-fila-review-crescimento.png)
 ![Crescimento da Fila de Suporte](docs/screenshots/04-fila-support-crescimento.png)
 
-### 6.4 Classificação em Tempo Real pelas IAs (Smile Naive Bayes)
-Execução dos dois consumidores independentes classificando o conteúdo com a biblioteca Smile e exibindo no console:
+### 6.4 Classificação em Tempo Real pelas IAs
+Logs dos consumidores classificando as mensagens via Smile Naive Bayes:
 ![Classificação das IAs](docs/screenshots/08-ia-classificacao-logs.png)
 
 ### 6.5 Tratamento de Erro e Dead Letter Queue (DLQ)
-Tratamento de mensagem rejeitada com `basicNack(requeue=false)` encaminhada automaticamente pelo Dead Letter Exchange (`app.dlx`) para a fila de mensagens mortas:
+Mensagens direcionadas para a DLQ após rejeição com `basicNack`:
 ![Dead Letter Queue Review](docs/screenshots/05-dlq-review.png)
 ![Dead Letter Queue Support](docs/screenshots/06-dlq-support.png)
 
 ---
 
-## 🛑 7. Finalização e Limpeza
-Para parar todos os serviços e remover os containers:
+## 7. Finalização
+Para parar os containers:
 ```bash
 docker compose down
 ```
-Para limpar também o volume persistente do RabbitMQ:
+Para parar e limpar volumes:
 ```bash
 docker compose down -v
 ```
