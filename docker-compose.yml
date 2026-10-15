@@ -1,0 +1,88 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # Porta padrão para comunicação AMQP (Java Producer / Consumers)
+      - "15672:15672"  # Interface Web de Gerenciamento do RabbitMQ
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - rabbitmq-network
+
+  gerador:
+    build:
+      context: ./gerador
+      dockerfile: Dockerfile
+    container_name: gerador
+    restart: unless-stopped
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      EXCHANGE_NAME: app.topic
+      MESSAGE_INTERVAL_MS: 180
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq-network
+
+  consumidor-sentimento:
+    build:
+      context: ./consumidor-sentimento
+      dockerfile: Dockerfile
+    container_name: consumidor-sentimento
+    restart: unless-stopped
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      MAIN_EXCHANGE: app.topic
+      DLX_NAME: app.dlx
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq-network
+
+  consumidor-suporte:
+    build:
+      context: ./consumidor-suporte
+      dockerfile: Dockerfile
+    container_name: consumidor-suporte
+    restart: unless-stopped
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      MAIN_EXCHANGE: app.topic
+      DLX_NAME: app.dlx
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rabbitmq-network
+
+networks:
+  rabbitmq-network:
+    driver: bridge
+    name: rabbitmq-network
+
+volumes:
+  rabbitmq_data:
+    driver: local
