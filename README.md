@@ -147,14 +147,30 @@ Durante a gravação da apresentação, demonstre os 5 pontos exigidos pelo trab
 
 ## 📸 6. Evidências de Execução
 
-*(Adicione suas capturas de tela nesta seção ou na pasta `docs/screenshots/`)*
+Abaixo estão registradas as evidências de execução do sistema cobrindo todos os requisitos avaliativos da atividade:
 
-| Evidência | Arquivo |
-| :--- | :--- |
-| **Crescimento das Filas no RabbitMQ** | `docs/screenshots/filas-crescendo.png` |
-| **Topic Exchange e Bindings** | `docs/screenshots/topic-exchange.png` |
-| **Mensagens roteadas para a DLQ** | `docs/screenshots/dlq-mensagens.png` |
-| **Execução das IAs nos Consumidores** | `docs/screenshots/logs-ia-classificacao.png` |
+### 6.1 Geração Contínua de Mensagens (> 5 msg/s)
+O serviço **Gerador** publica continuamente mensagens alternadas nos tipos `AVALIACAO` e `SUPORTE`, com taxa superior a 5 mensagens por segundo:
+![Logs do Gerador](docs/screenshots/07-gerador-logs.png)
+
+### 6.2 Topic Exchange e Roteamento (`review.product` e `support.request`)
+Visão geral dos exchanges no RabbitMQ e o mapeamento do Topic Exchange `app.topic` roteando mensagens com taxa de entrada/saída de **~5,4 msg/s**:
+![Exchanges RabbitMQ](docs/screenshots/01-exchanges-overview.png)
+![Bindings do Topic Exchange](docs/screenshots/02-topic-exchange-bindings.png)
+
+### 6.3 Crescimento das Filas e Consumo Lento (Manual ACK)
+As filas `queue.review` e `queue.support` acumulando mensagens (mais de 9.300 mensagens enfileiradas), evidenciando o consumo lento de ~1 msg/s com confirmação manual (`basicAck`) e QoS prefetch = 1:
+![Crescimento da Fila de Avaliações](docs/screenshots/03-fila-review-crescimento.png)
+![Crescimento da Fila de Suporte](docs/screenshots/04-fila-support-crescimento.png)
+
+### 6.4 Classificação em Tempo Real pelas IAs (Smile Naive Bayes)
+Execução dos dois consumidores independentes classificando o conteúdo com a biblioteca Smile e exibindo no console:
+![Classificação das IAs](docs/screenshots/08-ia-classificacao-logs.png)
+
+### 6.5 Tratamento de Erro e Dead Letter Queue (DLQ)
+Tratamento de mensagem rejeitada com `basicNack(requeue=false)` encaminhada automaticamente pelo Dead Letter Exchange (`app.dlx`) para a fila de mensagens mortas:
+![Dead Letter Queue Review](docs/screenshots/05-dlq-review.png)
+![Dead Letter Queue Support](docs/screenshots/06-dlq-support.png)
 
 ---
 
