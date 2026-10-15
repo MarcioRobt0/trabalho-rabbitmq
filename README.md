@@ -8,18 +8,6 @@ Este repositório contém a implementação de um sistema distribuído utilizand
 
 O sistema é composto por 4 containers em Docker conectados na mesma rede:
 
-```mermaid
-flowchart TD
-    G["1. Gerador (Java)<br/>(> 5 msg/s)"] -->|"review.product<br/>support.request"| TE["2. RabbitMQ<br/>(Topic Exchange)"]
-    TE -->|"review.product"| QR["Fila: queue.review"]
-    TE -->|"support.request"| QS["Fila: queue.support"]
-    QR -->|"ACK manual"| C1["3. Consumidor 1<br/>IA: Sentimento"]
-    QS -->|"ACK manual"| C2["4. Consumidor 2<br/>IA: Suporte"]
-    QR -.->|"Erro (NACK)"| DLR["DLQ: queue.review.dlq"]
-    QS -.->|"Erro (NACK)"| DLS["DLQ: queue.support.dlq"]
-```
-
-### Componentes:
 - **RabbitMQ:** Broker de mensageria com interface de administração habilitada.
 - **Gerador:** Cria e publica avaliações de produtos e solicitações de suporte continuamente (taxa mínima de 5 mensagens/segundo).
 - **Consumidor 1 (Sentimentos):** Consome as mensagens de avaliações de produtos.
